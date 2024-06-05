@@ -1,20 +1,30 @@
-use protobuf::EnumOrUnknown;
+use protobuf::{EnumOrUnknown, Message};
 
 use kv::{KV, Types};
+use crate::Error;
+use crate::Error::{DataInvalid, KeyNotFound, TypeMissMatch};
 
 include!(concat!(env!("OUT_DIR"), "/protos/mod.rs"));
 #[derive(Debug, Clone)]
-pub struct Buffer(pub(crate) KV);
+pub struct Buffer(KV);
 pub struct  ReaderResult{
     pub data: Vec<u8>,
     pub types: Types,
 }
 
-pub trait Encoder {
-    fn encode(&self, buffer: &Buffer, offset: u32) -> Result<Vec<u8>, Err()>;
+pub type Result<T> = std::result::Result<T, Error>;
+
+pub trait Encoder: Send {
+    fn encode_to_bytes(&self, raw_buffer: &Buffer, position: u32) -> Result<Vec<u8>>;
 }
-pub trait Decoder {
-    fn reade(&self, data: Vec<u8>) -> Result<ReaderResult,Err()>;
+
+pub struct DecodeResult {
+    pub buffer: Option<Buffer>,
+    pub len: u32,
+}
+
+pub trait Decoder: Send {
+    fn decode_bytes(&self, data: &[u8], position: u32) -> Result<DecodeResult>;
 }
 
 impl Buffer{
@@ -24,6 +34,56 @@ impl Buffer{
         kv.type_ = EnumOrUnknown::new(t);
         kv.value = value.to_vec();
         Buffer(kv)
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.0.write_to_bytes().unwrap()
+    }
+
+    pub fn key(&self) -> &str {
+        self.0.key.as_str()
+    }
+
+    pub fn value(&self) -> &[u8] {
+        self.0.value.as_slice()
+    }
+
+    pub fn is_deleting(&self) -> bool {
+        if let Ok(buffer_type) = self.0.type_.enum_value() {
+            buffer_type == Types::DELETED
+        } else {
+            false
+        }
+    }
+
+    fn check_buffer_type(&self, required: Types) -> Result<()> {
+        if self.is_deleting() {
+            return Err(KeyNotFound);
+        }
+        if required == self.0.type_.enum_value().map_err(|_| TypeMissMatch)? {
+            Ok(())
+        } else {
+            Err(TypeMissMatch)
+        }
+    }
+
+    pub fn decode_str(&self) -> Result<String> {
+        self.check_buffer_type(Types::STR)?;
+        if let Ok(str) = String::from_utf8(self.0.value.to_vec()) {
+            Ok(str)
+        } else {
+            Err(DataInvalid)
+        }
+    }
+
+    pub fn decode_bool(&self) -> Result<bool> {
+        self.check_buffer_type(Types::BYTE)?;
+        Ok(self.0.value[0] == 1)
+    }
+
+    pub fn decode_byte_array(&self) -> Result<Vec<u8>> {
+        self.check_buffer_type(Types::BYTE_ARRAY)?;
+        Ok(self.0.value.to_vec())
     }
 
     pub fn from_byte_array(key: &str, value: &[u8]) -> Self {

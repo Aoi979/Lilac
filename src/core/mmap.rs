@@ -1,6 +1,6 @@
-use std::{ptr, slice};
+use std::{io, ptr, slice};
 use std::fmt::Debug;
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Range};
 use std::os::fd::RawFd;
 use std::ptr::NonNull;
 
@@ -48,6 +48,8 @@ impl MMap{
             Err("flush failed")
         }
     }
+
+
 }
 
 impl Drop for MMap {
@@ -82,6 +84,7 @@ impl MemoryMap{
         MemoryMap(mmap)
     }
 
+
     pub fn append(&self, value: Vec<u8>) -> Result<Ok,Err()>{
         let value_capacity = value.len();
         let start = usize::from_be_bytes(self.0[0..HEADER_OFFSET].try_into().unwrap()) + HEADER_OFFSET;
@@ -92,6 +95,31 @@ impl MemoryMap{
         self.0[start..end].copy_from_slice(value.as_slice());
         self.0.flush(end)
     }
+    pub fn reset(&mut self) -> io::Result<()> {
+        let len = 0usize;
+        self.0[0..HEADER_OFFSET].copy_from_slice(len.to_be_bytes().as_slice());
+        self.0.flush(HEADER_OFFSET)
+    }
+
+    pub fn content_start_offset(&self) -> usize {
+        HEADER_OFFSET
+    }
+
+    /// The write offset of current mmap
+    pub fn write_offset(&self) -> usize {
+        usize::from_be_bytes(self.0[0..HEADER_OFFSET].try_into().unwrap()) + HEADER_OFFSET
+    }
+
+    /// The max len of current mmap
+    pub fn len(&self) -> usize {
+        self.0.capacity
+    }
+
+    pub fn read(&self, range: Range<usize>) -> &[u8] {
+        self.0[range].as_ref()
+    }
+
+
 
 
 
